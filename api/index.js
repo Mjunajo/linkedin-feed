@@ -1,19 +1,19 @@
 const puppeteer = require('puppeteer');
-const fs = require('fs');
-const path = require('path');
-
-const CACHE_FILE = path.join('/tmp', 'linkedin_posts.json'); // Vercel tmp directory
-const CACHE_TTL = 60 * 60 * 1000; // 1 hour in milliseconds
 
 const PROFILE_URL = 'https://www.linkedin.com/in/david-territo-758575b3/';
 const POST_LIMIT = 5;
+const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+// In-memory cache
+let cachedPosts = null;
+let cacheTime = 0;
 
 async function scrapeLinkedIn() {
     const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
     const page = await browser.newPage();
 
     await page.goto(PROFILE_URL, { waitUntil: 'networkidle2' });
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(5000); // wait for posts to load
 
     const posts = await page.evaluate((limit) => {
         const result = [];
@@ -31,26 +31,21 @@ async function scrapeLinkedIn() {
 
 module.exports = async function handler(req, res) {
     try {
-        let posts = [];
+        const now = Date.now();
 
-        // Check if cache exists and is fresh
-        if (fs.existsSync(CACHE_FILE)) {
-            const stats = fs.statSync(CACHE_FILE);
-            const age = Date.now() - stats.mtimeMs;
-            if (age < CACHE_TTL) {
-                posts = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
-                return res.status(200).json(posts);
-            }
+        // Serve cached posts if not expired
+        if (cachedPosts && (now - cacheTime < CACHE_TTL)) {
+            return res.status(200).json(cachedPosts);
         }
 
-        // Cache is missing or expired → scrape LinkedIn
-        posts = await scrapeLinkedIn();
+        // Fetch fresh posts
+        const posts = await scrapeLinkedIn();
 
-        // Save to cache
-        fs.writeFileSync(CACHE_FILE, JSON.stringify(posts, null, 2));
+        // Update cache
+        cachedPosts = posts;
+        cacheTime = now;
 
         res.status(200).json(posts);
-
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Failed to fetch LinkedIn posts' });
